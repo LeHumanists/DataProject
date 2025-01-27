@@ -121,7 +121,7 @@ class Activity(object):
         self.start = start
         self.end = end
         self.refers_to = refers_to
-    
+
     def getResponsibleInstitute(self):
         return self.institute
 
@@ -133,7 +133,7 @@ class Activity(object):
 
     def getTools(self):
         # it returns a list of strings
-        return self.tool
+        return self.tools
 
     def getStartDate(self):
         if self.start:
@@ -151,10 +151,10 @@ class Activity(object):
         return CulturalHeritageObject
 
 class Acquisition(Activity):
-    def __init__(self, institute, person, tools, start, end, refersTo, technique):
+    def __init__(self, institute, person, tools, start, end, refers_to, technique):
         self.technique = technique
 
-        super().__init__(institute, person, tools, start, end, refersTo)
+        super().__init__(institute, person, tools, start, end, refers_to)
     
     def getTechnique(self):
         return self.technique
@@ -239,40 +239,61 @@ class MetadataUploadHandler(UploadHandler):
 
     def _processRow(self, row: pd.Series):
         """Processes a single row and adds RDF triples to the graph."""
-        subj = URIRef(self.example + str(row["Id"]))
-        self.my_graph.add((subj, DCTERMS.identifier, Literal(row["Id"])))
+        try:
+            # Criar o sujeito com base no ID da linha
+            subj = URIRef(self.example + str(row["Id"]))
+            self.my_graph.add((subj, DCTERMS.identifier, Literal(row["Id"])))
+            print(f"Processing ID: {row['Id']}")
 
-        if row.get("Type", "").strip() in self.type_mapping:
-            self.my_graph.add((subj, RDF.type, self.type_mapping[row["Type"].strip()]))
+            # Adicionar o tipo de objeto cultural
+            if row.get("Type", "").strip() in self.type_mapping:
+                self.my_graph.add((subj, RDF.type, self.type_mapping[row["Type"].strip()]))
+                print(f"Added type: {row['Type']}")
 
-        if pd.notna(row.get("Title")):
-            self.my_graph.add((subj, DCTERMS.title, Literal(row["Title"].strip())))
-        if pd.notna(row.get("Date")):
-            self.my_graph.add((subj, self.schema.dateCreated, Literal(row["Date"], datatype=XSD.string)))
-        if pd.notna(row.get("Owner")):
-            self.my_graph.add((subj, FOAF.maker, Literal(row["Owner"].strip())))
-        if pd.notna(row.get("Place")):
-            self.my_graph.add((subj, DCTERMS.spatial, Literal(row["Place"].strip())))
-            
-        # Process authors
-            authors = row["Author"].split(",") if isinstance(row["Author"], str) else []
-            for author_string in authors:
-                author_string = author_string.strip()
-                
-                # Use regex to find author ID with either VIAF or ULAN
-                author_id_match = re.search(r'\((VIAF|ULAN):(\d+)\)', author_string)  # Match both VIAF and ULAN formats
-                if author_id_match:
-                    id_type = author_id_match.group(1)  # Either 'VIAF' or 'ULAN'
-                    id_value = author_id_match.group(2)  # The numeric ID
-                    person_id = URIRef(f"http://example.org/person/{id_type}_{id_value}")
-                else:
-                    # Fallback to a simple URI based on the author's name if no ID is found
-                    person_id = URIRef(f"http://example.org/person/{author_string.replace(' ', '_')}")
-                
-                # Add the author information to the graph
-                self.my_graph.add((person_id, DCTERMS.creator, subj))
-                self.my_graph.add((person_id, FOAF.name, Literal(author_string, datatype=XSD.string)))
+            # Adicionar título
+            if pd.notna(row.get("Title")):
+                self.my_graph.add((subj, DCTERMS.title, Literal(row["Title"].strip())))
+                print(f"Added title: {row['Title']}")
 
+            # Adicionar data de criação
+            if pd.notna(row.get("Date")):
+                self.my_graph.add((subj, self.schema.dateCreated, Literal(row["Date"], datatype=XSD.dateTime)))
+                print(f"Added date: {row['Date']}")
+
+            # Adicionar proprietário
+            if pd.notna(row.get("Owner")):
+                self.my_graph.add((subj, FOAF.maker, Literal(row["Owner"].strip())))
+                print(f"Added owner: {row['Owner']}")
+
+            # Adicionar localização
+            if pd.notna(row.get("Place")):
+                self.my_graph.add((subj, DCTERMS.spatial, Literal(row["Place"].strip())))
+                print(f"Added place: {row['Place']}")
+
+            # Processar os autores da linha
+            if "Author" in row and pd.notna(row["Author"]):
+                authors = row["Author"].split(",") if isinstance(row["Author"], str) else []
+                for author_string in authors:
+                    author_string = author_string.strip()
+
+                    # Verificar se há um identificador VIAF ou ULAN no autor
+                    author_id_match = re.search(r'\((VIAF|ULAN):(\d+)\)', author_string)
+                    if author_id_match:
+                        id_type = author_id_match.group(1)  # VIAF ou ULAN
+                        id_value = author_id_match.group(2)  # O ID numérico
+                        person_id = URIRef(f"http://example.org/person/{id_type}_{id_value}")
+                    else:
+                        # Fallback para URI baseado no nome do autor
+                        person_id = URIRef(f"http://example.org/person/{author_string.replace(' ', '_')}")
+
+                    # Adicionar o autor ao grafo
+                    self.my_graph.add((person_id, DCTERMS.creator, subj))
+                    self.my_graph.add((person_id, FOAF.name, Literal(author_string)))
+                    print(f"Added author: {author_string}, ID: {person_id}")
+
+        except Exception as e:
+            print(f"Error processing row: {row}. Exception: {e}")
+        
     def _uploadGraphToBlazegraph(self) -> bool:
         """Uploads the RDF graph to Blazegraph."""
         if not self.dbPathOrUrl:
@@ -338,7 +359,7 @@ class ProcessDataUploadHandler(UploadHandler):
         optimising = data_from_json(json_data, "optimising")
         exporting = data_from_json(json_data, "exporting")
 
-        print("Acquisition list:\n", acquisition)
+        #print("Acquisition list:\n", acquisition)
 
         # function for populating dataframes from lists
         def populateDf(process_list): 
@@ -357,8 +378,8 @@ class ProcessDataUploadHandler(UploadHandler):
         optimising_df = populateDf(optimising)
         exporting_df = populateDf(exporting)
 
-        print("Acquisition dataframe:\n", acquisition_df)
-        print("Acquisition dataframe info:", acquisition_df.info())
+        """ print("Acquisition dataframe:\n", acquisition_df)
+        print("Acquisition dataframe info:", acquisition_df.info()) """
 
         # create unique identifiers and append id column to df
         def createUniqueId(process_df, df_name):
@@ -380,13 +401,13 @@ class ProcessDataUploadHandler(UploadHandler):
         createUniqueId(optimising_df, "optimising")
         createUniqueId(exporting_df, "exporting")
 
-        print("Acquisition df with unique ids:\n", acquisition_df)
+       # print("Acquisition df with unique ids:\n", acquisition_df)
 
         # remove multi-valued attributes from df
         def keep_single_valued(process_df):
-            # dtypes stores a series where the first column lists the index for the Series (the column names) and the second one the datatype for each column
             dtypes = process_df.dtypes
-            print(isinstance(dtypes, pd.Series))
+            #print(isinstance(dtypes, pd.Series))
+
             # iterate over the columns in the Series
             for column_name, datatype in dtypes.items():
                 # if the column has datatype object...
@@ -405,9 +426,9 @@ class ProcessDataUploadHandler(UploadHandler):
         modelling_df, modelling_multi_valued = keep_single_valued(modelling_df)
         optimising_df, optimising_multi_valued = keep_single_valued(optimising_df)
         exporting_df, exporting_multi_valued = keep_single_valued(exporting_df)
-        print("Acquisition df and multi-valued df:\n", acquisition_df, acquisition_multi_valued)
+        """ print("Acquisition df and multi-valued df:\n", acquisition_df, acquisition_multi_valued)
         print(acquisition_df.info())
-        print(acquisition_multi_valued.info())
+        print(acquisition_multi_valued.info()) """
         
         # create multi-valued attributes tables
         def create_multi_valued_tables(multi_valued_df):
@@ -416,7 +437,7 @@ class ProcessDataUploadHandler(UploadHandler):
                 # populate dictionary with unique identifiers as keys and lists of tools as values
                 tools_dict[row.iloc[0]] = ast.literal_eval(row.iloc[1]) if isinstance(row.iloc[1], str) else row.iloc[1]
 
-            print(tools_dict)
+            #print(tools_dict)
 
             tools_unpacked = []
             identifiers_unpacked = []
@@ -430,7 +451,7 @@ class ProcessDataUploadHandler(UploadHandler):
                     for t in tool_list:
                         tools_unpacked.append(t)
 
-            print("list for tools:\n", tools_unpacked)
+            #print("list for tools:\n", tools_unpacked)
 
             # iterate over the list of identifiers
             for identifier in tools_dict.keys():
@@ -442,13 +463,13 @@ class ProcessDataUploadHandler(UploadHandler):
                     for n in range(list_length):
                         identifiers_unpacked.append(identifier)
 
-            print("list for identifiers:\n", identifiers_unpacked)
+            #print("list for identifiers:\n", identifiers_unpacked)
 
-            # create a list that contains the two series and join them in a dataframe where each series is a column
+            # create series and join them in a dataframe where each series is a column
             tools_series = pd.Series(tools_unpacked, dtype="string", name="tool")
             identifiers_series = pd.Series(identifiers_unpacked, dtype="string", name="unique_id")
             tools_df = pd.concat([identifiers_series, tools_series], axis=1)
-            print("The dataframe for tools:\n", tools_df)
+            #print("The dataframe for tools:\n", tools_df)
             
             return tools_df
 
@@ -467,7 +488,7 @@ class ProcessDataUploadHandler(UploadHandler):
         
         # function calls
         merged_tools_df = merge_mv_tables(ac_tools_df, pr_tools_df, md_tools_df, op_tools_df, ex_tools_df)
-        print("The merged dataframe:\n", merged_tools_df)
+        #print("The merged dataframe:\n", merged_tools_df)
         
         # F R A N C E S C A
         # pushing tables to db
@@ -488,7 +509,7 @@ class ProcessDataUploadHandler(UploadHandler):
             rel_db_tl = pd.read_sql("SELECT * FROM Tools", con)
 
             populated_tables = not any(df.empty for df in [rel_db_ac, rel_db_pr, rel_db_op, rel_db_md, rel_db_ex, rel_db_tl]) # add rel_db_tl
-            print(populated_tables)
+            #print(populated_tables)
             return populated_tables
 
 
@@ -653,11 +674,11 @@ class MetadataQueryHandler(QueryHandler):
         """
         return self.execute_query(query)
         
-        
+# F R A N C E S C A, M A T I L D E        
 acquisition_sql_df = DataFrame()
 tool_sql_df= DataFrame()
 
-# F R A N C E S C A, M A T I L D E
+
 def query_rel_db():
     activities = DataFrame()
     with connect("relational.db") as con:
@@ -734,9 +755,6 @@ class ProcessDataQueryHandler(QueryHandler):
     def getActivitiesStartedAfter(self, date):
         activities = query_rel_db()
         start_date_df = DataFrame()
-
-        activities.columns = activities.columns.str.strip()
-        print("Columns in the activities df:", activities.columns)
 
         start_date_df = activities[(activities["start date"] >= date) & (activities["start date"] != '')]
         
@@ -1047,7 +1065,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
         
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
         
 
@@ -1066,7 +1084,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
         
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1085,7 +1103,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
         
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1104,7 +1122,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
         
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1123,7 +1141,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
         
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1142,7 +1160,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
 
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1157,7 +1175,7 @@ class BasicMashup(object):
             print("No processQueryHandler found")
 
         updated_df = join_tools(concat_df_cleaned)
-        print(instantiate_class(updated_df))
+        #print(instantiate_class(updated_df))
         return instantiate_class(updated_df)
     
 
@@ -1272,14 +1290,15 @@ class AdvancedMashup(BasicMashup):
         all_objects = self.getAllCulturalHeritageObjects()
 
         # Match objects to activities
-        object_ids = {activity.refersTo_cho.id for activity in activities if activity.refersTo_cho}
+        object_ids = {activity.refersTo() for activity in activities if activity.refersTo()} 
+        id = {object_id.getId() for object_id in object_ids}
         for cho in all_objects:
-            if cho.id in object_ids:
+            if cho.getId() in id:
                 objects_list.append(cho)
 
         return objects_list
 
-    def getObjectsHandledByResponsibleInstitution(self, institution: str) -> list[CulturalHeritageObject]:  # F R A N C E S C A
+    def getObjectsHandledByResponsibleInstitution(self, institution: str) -> list[CulturalHeritageObject]:
         """Retrieve cultural heritage objects involved in activities handled by a specific institution."""
         objects_list = []
 
@@ -1294,13 +1313,21 @@ class AdvancedMashup(BasicMashup):
         all_objects = self.getAllCulturalHeritageObjects()
 
         # Match objects to activities
-        object_ids = {activity.refersTo_cho.id for activity in activities if activity.refersTo_cho}
+        object_ids = set()
+        for activity in activities:
+            # Accedi a refersTo_cho in modo robusto
+            refersTo_cho = getattr(activity, "refersTo_cho", None)
+            if refersTo_cho and hasattr(refersTo_cho, "id"):
+                object_ids.add(refersTo_cho.id)
+
         for cho in all_objects:
             if cho.id in object_ids:
                 objects_list.append(cho)
 
         return objects_list
-    
+
+    authors_cho_df = pd.DataFrame()
+    acq_timeframe_df = pd.DataFrame()
     def getAuthorsOfObjectsAcquiredInTimeFrame(self, start, end):  # M A T I L D E
         if not self.metadataQuery:  # Check if there are any handlers in the list
             raise ValueError("No MetadataQueryHandler has been added to AdvancedMashup.")
@@ -1345,7 +1372,8 @@ class AdvancedMashup(BasicMashup):
         with connect("relational.db") as con:
             sql_query = "SELECT `start date`, `end date`, `refers_to` FROM Acquisition"
             acq_timeframe_df = read_sql(sql_query, con)
-    
+        print("Acquisition dataframe:", acq_timeframe_df)
+
         # Merge the resulting dataframes
         merged = pd.merge(authors_cho_df, acq_timeframe_df, left_on="objects_id", right_on="refers_to", how="inner")
         print("Merged dataframe:\n", merged)
