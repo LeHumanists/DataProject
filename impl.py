@@ -227,74 +227,73 @@ class MetadataUploadHandler(UploadHandler):
                 return False
 
             # Process each row into RDF triples
-            for _, row in df.iterrows():
-                self._processRow(row)
+            for index, row in df.iterrows():
+                self.processRow(row)
 
             # Upload the graph to Blazegraph
-            return self._uploadGraphToBlazegraph()
+            return self.uploadGraphToBlazegraph()
 
         except Exception as e:
             print(f"Error processing CSV file {file_path}: {e}")
             return False
 
-    def _processRow(self, row: pd.Series):
+    def processRow(self, row: pd.Series):
         """Processes a single row and adds RDF triples to the graph."""
         try:
-            # Criar o sujeito com base no ID da linha
+            # Creates the subject usin the ID in the line
             subj = URIRef(self.example + str(row["Id"]))
             self.my_graph.add((subj, DCTERMS.identifier, Literal(row["Id"])))
             print(f"Processing ID: {row['Id']}")
 
-            # Adicionar o tipo de objeto cultural
+            # ADD the type of cultural object
             if row.get("Type", "").strip() in self.type_mapping:
                 self.my_graph.add((subj, RDF.type, self.type_mapping[row["Type"].strip()]))
                 print(f"Added type: {row['Type']}")
 
-            # Adicionar título
+            # Adds title
             if pd.notna(row.get("Title")):
                 self.my_graph.add((subj, DCTERMS.title, Literal(row["Title"].strip())))
                 print(f"Added title: {row['Title']}")
 
-            # Adicionar data de criação
+            # Adds creation date as a string literal
             if pd.notna(row.get("Date")):
-                self.my_graph.add((subj, self.schema.dateCreated, Literal(row["Date"], datatype=XSD.dateTime)))
+                self.my_graph.add((subj, self.schema.dateCreated, Literal(str(row["Date"]), datatype=XSD.string)))
                 print(f"Added date: {row['Date']}")
 
-            # Adicionar proprietário
+            # Adds owner
             if pd.notna(row.get("Owner")):
                 self.my_graph.add((subj, FOAF.maker, Literal(row["Owner"].strip())))
                 print(f"Added owner: {row['Owner']}")
 
-            # Adicionar localização
+            # Adds location
             if pd.notna(row.get("Place")):
                 self.my_graph.add((subj, DCTERMS.spatial, Literal(row["Place"].strip())))
                 print(f"Added place: {row['Place']}")
 
-            # Processar os autores da linha
+            # Process the authors in the line
             if "Author" in row and pd.notna(row["Author"]):
-                authors = row["Author"].split(",") if isinstance(row["Author"], str) else []
+                # Split authors by semicolon (;) instead of comma (,)
+                authors = row["Author"].split(";") if isinstance(row["Author"], str) else []
+                
                 for author_string in authors:
                     author_string = author_string.strip()
 
-                    # Verificar se há um identificador VIAF ou ULAN no autor
-                    author_id_match = re.search(r'\((VIAF|ULAN):(\d+)\)', author_string)
+                    author_id_match = re.search(r'\(([\w\-]+):([\w\-]+)\)', author_string)
                     if author_id_match:
-                        id_type = author_id_match.group(1)  # VIAF ou ULAN
-                        id_value = author_id_match.group(2)  # O ID numérico
+                        id_type = author_id_match.group(1)
+                        id_value = author_id_match.group(2)
                         person_id = URIRef(f"http://example.org/person/{id_type}_{id_value}")
                     else:
-                        # Fallback para URI baseado no nome do autor
                         person_id = URIRef(f"http://example.org/person/{author_string.replace(' ', '_')}")
 
-                    # Adicionar o autor ao grafo
                     self.my_graph.add((person_id, DCTERMS.creator, subj))
                     self.my_graph.add((person_id, FOAF.name, Literal(author_string)))
                     print(f"Added author: {author_string}, ID: {person_id}")
-
+                    
         except Exception as e:
             print(f"Error processing row: {row}. Exception: {e}")
         
-    def _uploadGraphToBlazegraph(self) -> bool:
+    def uploadGraphToBlazegraph(self) -> bool:
         """Uploads the RDF graph to Blazegraph."""
         if not self.dbPathOrUrl:
             print("Error: SPARQL endpoint is not set. Use setDbPathOrUrl to configure it.")
@@ -598,15 +597,17 @@ class MetadataQueryHandler(QueryHandler):
 
     def getAllPeople(self) -> pd.DataFrame:
         """
-        Fetch all people from the database.
+        Fetch all people from the database (based on foaf:name and their URI).
         """
         query = """
         PREFIX dcterms: <http://purl.org/dc/terms/>
+        PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+
         SELECT DISTINCT ?personName ?personID
         WHERE {
-            ?object dcterms:creator ?creator .
-            BIND (STRAFTER(?creator, "(") AS ?personID) .
-            BIND (STRBEFORE(?creator, " (") AS ?personName) .
+            ?person foaf:name ?personName .
+            ?person dcterms:creator ?object .
+            BIND(STR(?person) AS ?personID)
         }
         ORDER BY ?personName
         """
@@ -1233,44 +1234,23 @@ class AdvancedMashup(BasicMashup):
     def __init__(self):
         super().__init__()  # Inherit initialization from BasicMashup
 
-    def getActivitiesOnObjectsAuthoredBy(self, person_id: str):  # C A R L A
-        """Retrieve activities related to cultural heritage objects authored by a specific person."""
+    def getActivitiesOnObjectsAuthoredBy(self, person_id: str): #C A R L A
         activities = []
 
-        # Validate inputs
-        if not person_id or not self.metadataQuery or not self.processQuery:
-            print("Error: Missing person_id, metadataQuery, or processQuery.")
-            return activities
+        # Get IDs of objects authored by the person
+        authored_object_ids = set()
+        for handler in self.metadataQuery:
+            authored_objects = handler.getCulturalHeritageObjectsAuthoredBy(person_id)
+            authored_object_ids.update(obj.getId() for obj in authored_objects)
 
-        # Retrieve cultural heritage objects authored by the person
-        authored_objects = []
-        for metadata_handler in self.metadataQuery:
-            try:
-                authored_objects.extend(metadata_handler.getCulturalHeritageObjectsAuthoredBy(person_id))
-            except Exception as e:
-                print(f"Error querying authored objects from metadata handler: {e}")
-
-        if not authored_objects:
-            return activities  # No authored objects found, return empty list
-
-        # Debug: Check authored_objects content
-        print("Authored objects:", authored_objects)
-        print("Types in authored_objects:", [type(obj) for obj in authored_objects])
-
-        # Retrieve all activities
+        # Get all activities
         all_activities = []
-        for process_handler in self.processQuery:
-            try:
-                all_activities.extend(process_handler.getAllActivities())
-            except Exception as e:
-                print(f"Error querying activities from process handler: {e}")
+        for handler in self.processQuery:
+            all_activities.extend(handler.getAllActivities())
 
-        # Match activities to authored objects
-        authored_object_ids = {
-            obj.getId() for obj in authored_objects if hasattr(obj, "getId")
-        }
+        # Keep only activities linked to authored objects
         for activity in all_activities:
-            if any(object_id in activity.getRelatedObjectIds() for object_id in authored_object_ids):
+            if getattr(activity, "refers_to", None) in authored_object_ids:
                 activities.append(activity)
 
         return activities
