@@ -248,6 +248,7 @@ class MetadataUploadHandler(UploadHandler):
             # ADD the type of cultural object
             if row.get("Type", "").strip() in self.type_mapping:
                 self.my_graph.add((subj, RDF.type, self.type_mapping[row["Type"].strip()]))
+                self.my_graph.add((subj, RDF.type, URIRef("http://dbpedia.org/ontology/CulturalHeritageObject")))
                 print(f"Added type: {row['Type']}")
 
             # Adds title
